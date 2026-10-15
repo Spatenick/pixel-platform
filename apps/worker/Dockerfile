@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
-FROM python:3.13-slim AS build
+FROM python:3.14-slim AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /venv
 COPY requirements.txt .
 RUN /venv/bin/pip install -r requirements.txt
 
-FROM python:3.13-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ARG APP_VERSION=dev
 ENV PATH="/venv/bin:$PATH" \
