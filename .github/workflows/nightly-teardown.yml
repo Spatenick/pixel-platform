@@ -1,0 +1,23 @@
+name: nightly-teardown
+
+# Cost control: destroy dev every weekday evening so a forgotten cluster
+# can't run up a bill. Enable with the repo variable AUTO_TEARDOWN_ENABLED=true.
+# Bring it back in the morning with: Actions -> infra-apply -> Run (dev, apply).
+
+on:
+  schedule:
+    - cron: "0 21 * * 1-5" # 21:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  teardown:
+    if: vars.AUTO_TEARDOWN_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/_terraform-env.yml
+    with:
+      environment: dev
+      action: destroy
+    secrets: inherit

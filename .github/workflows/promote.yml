@@ -1,0 +1,55 @@
+name: promote-to-prod
+
+# Promotion = copy the image tags that are running in dev into prod's values
+# and open a PR. Merging the PR (after review) is the deploy; Argo CD syncs it.
+# Same image digest goes to prod -- nothing is rebuilt.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Copy dev image tags to prod
+        id: tags
+        run: |
+          changed=""
+          for svc in api worker; do
+            tag=$(yq '.image.tag' "gitops/envs/dev/values/$svc.yaml")
+            current=$(yq '.image.tag' "gitops/envs/prod/values/$svc.yaml")
+            if [ "$tag" != "$current" ]; then
+              yq -i ".image.tag = \"$tag\"" "gitops/envs/prod/values/$svc.yaml"
+              changed="$changed $svc:${current::7}->${tag::7}"
+            fi
+          done
+          echo "changed=${changed# }" >> "$GITHUB_OUTPUT"
+      - name: Open PR
+        if: steps.tags.outputs.changed != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGED: ${{ steps.tags.outputs.changed }}
+        run: |
+          branch="promote/$(date +%Y%m%d-%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add gitops/envs/prod/values
+          git commit -m "deploy(prod): promote ${CHANGED}"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "Promote to prod: ${CHANGED}" \
+            --body "Promotes the images currently running in **dev** to **prod**: \`${CHANGED}\`.
+
+          Checklist before merging:
+          - [ ] dev dashboard healthy (error ratio under SLO, no firing alerts)
+          - [ ] no unexpected DLQ messages in dev
+          - [ ] rollback plan: revert this PR"
+      - name: Nothing to promote
+        if: steps.tags.outputs.changed == ''
+        run: echo "prod already runs the same images as dev." >> "$GITHUB_STEP_SUMMARY"

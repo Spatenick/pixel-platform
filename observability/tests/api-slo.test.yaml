@@ -1,0 +1,52 @@
+# Unit tests for the API's SLO alerts -- alerts are code, so they get tests.
+# CI renders the chart, extracts the PrometheusRule into rules.yaml, then runs:
+#   promtool test rules observability/tests/api-slo.test.yaml
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ~9% of requests failing: burns a 0.5% budget ~18x too fast -> page.
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="pixelpipe-api",method="GET",route="/v1/images",status="200"}'
+        values: "0+100x90"
+      - series: 'http_requests_total{job="pixelpipe-api",method="GET",route="/v1/images",status="500"}'
+        values: "0+10x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PixelpipeApiErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: API is burning its 30-day error budget ~14x too fast
+              runbook_url: https://github.com/YOUR_GITHUB_USER/YOUR_REPO/blob/main/docs/runbooks/api-high-error-rate.md
+
+  # 0.1% errors is inside the budget: nothing should fire.
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="pixelpipe-api",method="GET",route="/v1/images",status="200"}'
+        values: "0+1000x90"
+      - series: 'http_requests_total{job="pixelpipe-api",method="GET",route="/v1/images",status="500"}'
+        values: "0+1x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PixelpipeApiErrorBudgetFastBurn
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: PixelpipeApiErrorBudgetSlowBurn
+        exp_alerts: []
+
+  # A short spike (5 minutes) must NOT page: the 1h window keeps it quiet.
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="pixelpipe-api",method="GET",route="/v1/images",status="200"}'
+        values: "0+100x90"
+      - series: 'http_requests_total{job="pixelpipe-api",method="GET",route="/v1/images",status="500"}'
+        values: "0x60 0+50x5 250x25"
+    alert_rule_test:
+      - eval_time: 66m
+        alertname: PixelpipeApiErrorBudgetFastBurn
+        exp_alerts: []

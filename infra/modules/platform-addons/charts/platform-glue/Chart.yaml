@@ -1,0 +1,10 @@
+apiVersion: v2
+name: platform-glue
+description: >
+  Environment-specific glue installed by Terraform: the gp3 StorageClass, the
+  ClusterSecretStore for AWS Secrets Manager, the ConfigMap of infra outputs
+  the apps read, and the ExternalSecret that materialises the DB credentials.
+  This is the contract between the infrastructure layer and the app layer.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

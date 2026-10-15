@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+project             = "pixelpipe"
+region              = "eu-west-2"
+github_owner        = "your-github-username"
+github_repo         = "pixelpipe-platform"
+monthly_budget_usd  = 40
+budget_alert_emails = ["you@example.com"]
+
+# Set to false if you've already created the GitHub OIDC provider in this account
+create_github_oidc_provider = true

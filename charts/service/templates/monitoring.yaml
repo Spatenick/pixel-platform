@@ -1,0 +1,30 @@
+{{- if and .Values.serviceMonitor.enabled .Values.service.enabled (or .Values.containerPort .Values.metricsPort) }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "service.fullname" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: {{ include "service.metricsPortName" . }}
+      path: {{ .Values.metricsPath }}
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}
+{{- if and .Values.prometheusRule.enabled .Values.prometheusRule.rules }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "service.fullname" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: {{ include "service.fullname" . }}
+      rules:
+        {{- toYaml .Values.prometheusRule.rules | nindent 8 }}
+{{- end }}

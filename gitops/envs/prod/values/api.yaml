@@ -1,0 +1,101 @@
+# pixelpipe-api in prod. Promoted from dev by the 'promote' workflow (a reviewed PR).
+fullnameOverride: pixelpipe-api
+
+image:
+  repository: ACCOUNT_ID.dkr.ecr.eu-west-2.amazonaws.com/pixelpipe-api
+  tag: "initial"
+
+containerPort: 8080
+
+serviceAccount:
+  create: true
+  name: pixelpipe-api # matches the EKS Pod Identity association in Terraform
+
+# Infra outputs (bucket, queue, DB host...) + DB credentials from Secrets Manager
+envFrom:
+  - configMapRef:
+      name: pixelpipe-infra
+  - secretRef:
+      name: pixelpipe-db
+
+env:
+  LOG_LEVEL: INFO
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 192Mi
+  limits:
+    memory: 320Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: true
+  className: alb
+  host: "" # e.g. api.prod.example.com when domain_name is set in Terraform
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /readyz
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/group.name: pixelpipe-prod
+    alb.ingress.kubernetes.io/tags: Project=pixelpipe,Environment=prod
+    # With a domain + ACM certificate, swap listen-ports for:
+    #   alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    #   alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+networkPolicy:
+  enabled: true
+  allowNamespaces: [monitoring]
+  allowCIDRs: ["10.20.0.0/16"] # prod VPC: ALB (IP targets) + kubelet probes
+
+# --- SLOs: 99.5% of requests succeed; p95 latency of reads < 500ms ----------
+# Multi-window, multi-burn-rate alerts (Google SRE workbook, ch. 5).
+prometheusRule:
+  enabled: true
+  rules:
+    - record: pixelpipe:api_errors:ratio_rate5m
+      expr: sum(rate(http_requests_total{job="pixelpipe-api",status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total{job="pixelpipe-api"}[5m])), 1e-9)
+    - record: pixelpipe:api_errors:ratio_rate30m
+      expr: sum(rate(http_requests_total{job="pixelpipe-api",status=~"5.."}[30m])) / clamp_min(sum(rate(http_requests_total{job="pixelpipe-api"}[30m])), 1e-9)
+    - record: pixelpipe:api_errors:ratio_rate1h
+      expr: sum(rate(http_requests_total{job="pixelpipe-api",status=~"5.."}[1h])) / clamp_min(sum(rate(http_requests_total{job="pixelpipe-api"}[1h])), 1e-9)
+    - record: pixelpipe:api_errors:ratio_rate6h
+      expr: sum(rate(http_requests_total{job="pixelpipe-api",status=~"5.."}[6h])) / clamp_min(sum(rate(http_requests_total{job="pixelpipe-api"}[6h])), 1e-9)
+    - alert: PixelpipeApiErrorBudgetFastBurn
+      expr: pixelpipe:api_errors:ratio_rate1h > (14.4 * 0.005) and pixelpipe:api_errors:ratio_rate5m > (14.4 * 0.005)
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: API is burning its 30-day error budget ~14x too fast
+        runbook_url: https://github.com/YOUR_GITHUB_USER/YOUR_REPO/blob/main/docs/runbooks/api-high-error-rate.md
+    - alert: PixelpipeApiErrorBudgetSlowBurn
+      expr: pixelpipe:api_errors:ratio_rate6h > (6 * 0.005) and pixelpipe:api_errors:ratio_rate30m > (6 * 0.005)
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: API error rate is steadily eating the error budget
+        runbook_url: https://github.com/YOUR_GITHUB_USER/YOUR_REPO/blob/main/docs/runbooks/api-high-error-rate.md
+    - alert: PixelpipeApiSlowReads
+      expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="pixelpipe-api",method="GET"}[5m]))) > 0.5
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: p95 latency of API reads is above 500ms
+        runbook_url: https://github.com/YOUR_GITHUB_USER/YOUR_REPO/blob/main/docs/runbooks/api-high-error-rate.md
+    - alert: PixelpipeApiNoHealthyTargets
+      expr: sum(up{job="pixelpipe-api"}) == 0 or absent(up{job="pixelpipe-api"})
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: Prometheus can't scrape any pixelpipe-api pod
+        runbook_url: https://github.com/YOUR_GITHUB_USER/YOUR_REPO/blob/main/docs/runbooks/api-high-error-rate.md

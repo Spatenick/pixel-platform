@@ -1,0 +1,176 @@
+name: app
+
+# Test -> build -> scan -> push -> GitOps deploy to dev.
+# Prod is never deployed from here; it's promoted with a reviewed PR (promote.yml).
+
+on:
+  pull_request:
+    paths: ["apps/**", "charts/**", "gitops/**", "observability/**", ".github/workflows/app-ci.yml"]
+  push:
+    branches: [main]
+    paths: ["apps/**", "charts/**", ".github/workflows/app-ci.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  KUBECONFORM_VERSION: "0.6.7"
+  PROMETHEUS_VERSION: "3.7.0"
+
+jobs:
+  test:
+    name: test (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: pixelpipe
+          POSTGRES_PASSWORD: pixelpipe
+          POSTGRES_DB: pixelpipe
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pixelpipe"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: apps/${{ matrix.service }}/requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Unit + integration tests
+        env:
+          PIXELPIPE_TEST_DATABASE_URL: "host=localhost port=5432 dbname=pixelpipe user=pixelpipe password=pixelpipe"
+        run: pytest -v
+
+  chart:
+    name: chart, manifests & alert rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+      - name: Install kubeconform + promtool
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar xz -C /usr/local/bin kubeconform
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | sudo tar xz --strip-components=1 -C /usr/local/bin "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+      - name: Lint & render the chart for every environment
+        run: |
+          mkdir -p rendered
+          for env in dev prod; do
+            for svc in api worker; do
+              helm lint charts/service -f "gitops/envs/$env/values/$svc.yaml"
+              helm template "pixelpipe-$svc" charts/service -n pixelpipe \
+                -f "gitops/envs/$env/values/$svc.yaml" > "rendered/$env-$svc.yaml"
+            done
+          done
+      - name: Validate manifests against Kubernetes + CRD schemas
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            rendered/*.yaml gitops/envs/*/*.yaml gitops/shared/observability/*.yaml
+      - name: Check and unit-test alert rules
+        run: |
+          yq 'select(.kind == "PrometheusRule") | .spec' rendered/dev-api.yaml > observability/tests/rules.yaml
+          promtool check rules observability/tests/rules.yaml
+          promtool test rules observability/tests/api-slo.test.yaml
+
+  build:
+    name: build (${{ matrix.service }})
+    needs: [test, chart]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api, worker]
+    permissions:
+      contents: read
+      id-token: write # OIDC -> AWS, only used on main
+    env:
+      IMAGE: ${{ vars.ECR_REGISTRY }}/pixelpipe-${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/${{ matrix.service }}
+          load: true
+          tags: local/pixelpipe-${{ matrix.service }}:${{ github.sha }}
+          build-args: APP_VERSION=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Scan image (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: local/pixelpipe-${{ matrix.service }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Configure AWS credentials (OIDC)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Push to ECR
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          aws ecr get-login-password --region "${{ vars.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ vars.ECR_REGISTRY }}"
+          docker tag "local/pixelpipe-${{ matrix.service }}:${{ github.sha }}" "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:${{ github.sha }}"
+
+  deploy-dev:
+    name: deploy to dev (GitOps)
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the new image tag
+    steps:
+      - uses: actions/checkout@v5
+      - name: Bump image tags in gitops/envs/dev
+        run: |
+          for svc in api worker; do
+            yq -i ".image.tag = \"${GITHUB_SHA}\"" "gitops/envs/dev/values/$svc.yaml"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gitops/envs/dev/values
+          git commit -m "deploy(dev): pixelpipe ${GITHUB_SHA::7}"
+          # Retry in case another merge landed while we were building
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((i * 3))
+          done
+          exit 1
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed \`${GITHUB_SHA::7}\` to dev"
+            echo "Argo CD picks up the new tag within ~3 minutes (or click *Refresh* in the UI)."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,30 @@
+# Checkov config. Every skipped check is a deliberate, documented trade-off
+# (mostly cost on a personal account) -- not an "ignore all warnings". In an
+# interview, this list is a great conversation starter.
+compact: true
+quiet: true
+framework:
+  - terraform
+skip-check:
+  # --- cost trade-offs for a portfolio account (would enable in a real company) ---
+  - CKV_AWS_144   # S3 cross-region replication: doubles storage; demo data expires in 7 days
+  - CKV_AWS_18    # S3 access logging: use CloudTrail data events when needed instead
+  - CKV2_AWS_62   # S3 event notifications: nothing consumes them
+  - CKV_AWS_158   # CloudWatch log group CMK: AWS-managed encryption is on by default; CMK adds cost + key policy work
+  - CKV_AWS_338   # 1-year log retention: dev keeps 3 days, prod 30 -- retention is a per-env variable
+  - CKV_AWS_118   # RDS enhanced monitoring: extra CloudWatch cost; CloudWatch basic metrics + PG logs are exported
+  - CKV_AWS_353   # RDS Performance Insights: toggle exists (performance_insights_enabled)
+  - CKV_AWS_37    # EKS control-plane logs: api/audit/authenticator on; scheduler/controllerManager off (cost)
+  # --- environment-dependent: prod sets these, dev deliberately doesn't ---
+  - CKV_AWS_157   # RDS Multi-AZ: db_multi_az = true in prod
+  - CKV_AWS_293   # RDS deletion protection: db_deletion_protection = true in prod
+  # --- intentional design decisions (see docs/adr) ---
+  - CKV_AWS_274   # CI apply role has AdministratorAccess; guarded by OIDC subject + prod approval (ADR 0003)
+  - CKV2_AWS_71   # Wildcard ACM cert (*.env.domain) is intentional: one cert per environment
+  - CKV_AWS_38    # EKS public endpoint CIDRs are a variable (eks_public_access_cidrs) -- restrict to your IP
+  - CKV_AWS_39    # Public endpoint kept on so you (and GitHub-hosted runners) can reach the API server
+  - CKV_AWS_341   # IMDS hop limit 2; tighten to 1 per docs/hardening.md once verified
+  - CKV_AWS_356   # route53:ListHostedZones etc. only support "*" as a resource
+  # --- checks that lag behind AWS ---
+  - CKV_AWS_339   # "Supported EKS version" list in Checkov trails new EKS releases
+  - CKV_AWS_394   # AZs are selected by state + opt-in filter; order is stable per account

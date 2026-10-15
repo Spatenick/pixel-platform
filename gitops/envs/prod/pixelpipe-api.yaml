@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pixelpipe-api
+  namespace: argocd
+  # Deleting the Application deletes what it deployed (including the ALB).
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOUR_GITHUB_USER/YOUR_REPO.git
+    targetRevision: main
+    path: charts/service
+    helm:
+      releaseName: pixelpipe-api
+      valueFiles:
+        - ../../gitops/envs/prod/values/api.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pixelpipe
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+  # The HPA owns replica count; don't let Argo fight it.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

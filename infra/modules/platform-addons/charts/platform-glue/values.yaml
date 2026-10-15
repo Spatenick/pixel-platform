@@ -1,0 +1,19 @@
+storageClass:
+  create: true
+  name: gp3
+  isDefault: true
+
+clusterSecretStore:
+  name: aws-secrets-manager
+  region: eu-west-2
+
+# Rendered as a ConfigMap the apps load with envFrom.
+infraConfig:
+  name: pixelpipe-infra
+  data: {}
+
+databaseSecret:
+  name: pixelpipe-db
+  # Secrets Manager secret name or ARN holding {"username": ..., "password": ...}
+  remoteKey: ""
+  refreshInterval: 1h

@@ -1,0 +1,140 @@
+# Defaults are secure-by-default; environments override in gitops/envs/<env>/values/.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+command: []
+args: []
+
+# Main HTTP port (0 = the service has no HTTP port, e.g. a queue worker).
+containerPort: 8080
+# Separate metrics port (0 = metrics are served on containerPort).
+metricsPort: 0
+metricsPath: /metrics
+
+# Plain env vars, as a map.
+env: {}
+# Whole ConfigMaps/Secrets as env vars -- this is how infra outputs
+# (pixelpipe-infra ConfigMap) and DB creds (pixelpipe-db Secret) arrive.
+envFrom: []
+
+serviceAccount:
+  create: true
+  # Must match the EKS Pod Identity association Terraform created.
+  name: ""
+  annotations: {}
+
+automountServiceAccountToken: false
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  periodSeconds: 5
+  failureThreshold: 2
+
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 2
+  failureThreshold: 30
+
+terminationGracePeriodSeconds: 30
+
+# Spread replicas across AZs (and nodes) so one AZ outage can't take us down.
+topologySpread:
+  enabled: true
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: alb
+  host: ""
+  path: /
+  pathType: Prefix
+  annotations: {}
+
+# CPU-based autoscaling.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# Event-driven autoscaling on SQS queue depth (KEDA). Don't combine with autoscaling.enabled.
+keda:
+  enabled: false
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  pollingInterval: 15
+  cooldownPeriod: 120
+  sqs:
+    # Read the queue URL from the container's environment (the infra ConfigMap)
+    queueURLFromEnv: SQS_QUEUE_URL
+    awsRegion: eu-west-2
+    # Target messages per replica
+    queueLength: "5"
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
+# PrometheusRule groups -> alerting rules for this service.
+prometheusRule:
+  enabled: false
+  rules: []
+
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to reach every port (Prometheus lives in "monitoring").
+  allowNamespaces:
+    - monitoring
+  # CIDRs allowed to reach the app ports: the VPC (ALB in IP mode + kubelet probes).
+  allowCIDRs: []

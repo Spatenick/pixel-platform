@@ -1,0 +1,62 @@
+{{- if and .Values.autoscaling.enabled .Values.keda.enabled }}
+{{- fail "Enable either autoscaling (HPA) or keda, not both -- KEDA manages its own HPA." }}
+{{- end }}
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "service.fullname" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "service.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+{{- end }}
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "service.fullname" . }}-aws
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  # Use the KEDA operator's own EKS Pod Identity role (it may only read queue depth).
+  podIdentity:
+    provider: aws
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "service.fullname" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "service.fullname" . }}
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  triggers:
+    - type: aws-sqs-queue
+      authenticationRef:
+        name: {{ include "service.fullname" . }}-aws
+      metadata:
+        queueURLFromEnv: {{ .Values.keda.sqs.queueURLFromEnv | quote }}
+        queueLength: {{ .Values.keda.sqs.queueLength | quote }}
+        awsRegion: {{ .Values.keda.sqs.awsRegion | quote }}
+{{- end }}

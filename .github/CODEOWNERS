@@ -1,0 +1,4 @@
+# Changes to pipelines and infrastructure need a review from the owner.
+# (Enable "Require review from Code Owners" in branch protection.)
+/.github/   @YOUR_GITHUB_USER
+/infra/     @YOUR_GITHUB_USER

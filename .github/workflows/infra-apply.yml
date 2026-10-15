@@ -1,0 +1,56 @@
+name: infra-apply
+
+# Merging infra changes to main applies them: dev first, then prod behind a
+# manual approval (configure "Required reviewers" on the prod environment).
+# Can also be run by hand to apply or destroy a single environment.
+
+on:
+  push:
+    branches: [main]
+    paths: ["infra/envs/**", "infra/modules/**", ".github/workflows/infra-apply.yml"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+      action:
+        description: What to do
+        type: choice
+        options: [apply, destroy]
+        default: apply
+
+concurrency:
+  group: infra-apply # never run two applies at once
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  dev:
+    if: github.event_name == 'push' || inputs.environment == 'dev'
+    uses: ./.github/workflows/_terraform-env.yml
+    with:
+      environment: dev
+      action: ${{ inputs.action || 'apply' }}
+    secrets: inherit
+
+  prod:
+    needs: dev
+    # On push, prod only follows dev when you've opted in (repo variable PROD_ENABLED=true).
+    if: |
+      always() &&
+      ((github.event_name == 'push' && vars.PROD_ENABLED == 'true' && needs.dev.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod'))
+    uses: ./.github/workflows/_terraform-env.yml
+    with:
+      environment: prod
+      action: ${{ inputs.action || 'apply' }}
+    secrets: inherit

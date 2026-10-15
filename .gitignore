@@ -1,0 +1,39 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# bootstrap tfvars contains your email; env tfvars are safe to commit
+infra/bootstrap/terraform.tfvars
+plan.txt
+plan-full.txt
+plan.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# CI scratch
+rendered/
+observability/tests/rules.yaml
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp

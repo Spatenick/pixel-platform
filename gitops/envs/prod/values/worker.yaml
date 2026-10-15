@@ -1,0 +1,89 @@
+# pixelpipe-worker in prod. Promoted from dev by the 'promote' workflow (a reviewed PR).
+fullnameOverride: pixelpipe-worker
+
+image:
+  repository: ACCOUNT_ID.dkr.ecr.eu-west-2.amazonaws.com/pixelpipe-worker
+  tag: "initial"
+
+# No HTTP API -- only a health/metrics port.
+containerPort: 0
+metricsPort: 9100
+
+serviceAccount:
+  create: true
+  name: pixelpipe-worker
+
+envFrom:
+  - configMapRef:
+      name: pixelpipe-infra
+  - secretRef:
+      name: pixelpipe-db
+
+env:
+  LOG_LEVEL: INFO
+  THUMBNAIL_MAX_PX: "256"
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  periodSeconds: 15
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  periodSeconds: 10
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  periodSeconds: 2
+  failureThreshold: 30
+
+# Long-poll is 20s; give in-flight jobs time to finish after SIGTERM.
+terminationGracePeriodSeconds: 60
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    memory: 512Mi
+
+# Scale on queue depth: always keep 1 warm pod in prod, +1 per 5 waiting jobs.
+keda:
+  enabled: true
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 10
+  cooldownPeriod: 120
+  sqs:
+    queueURLFromEnv: SQS_QUEUE_URL
+    awsRegion: eu-west-2
+    queueLength: "5"
+
+networkPolicy:
+  enabled: true
+  allowNamespaces: [monitoring]
+  allowCIDRs: ["10.20.0.0/16"]
+
+prometheusRule:
+  enabled: true
+  rules:
+    - alert: PixelpipeWorkerJobsFailing
+      expr: sum(rate(pixelpipe_jobs_total{result=~"dead_letter|invalid_image|invalid_message"}[15m])) / clamp_min(sum(rate(pixelpipe_jobs_total[15m])), 1e-9) > 0.1
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: More than 10% of thumbnail jobs are failing
+        runbook_url: https://github.com/YOUR_GITHUB_USER/YOUR_REPO/blob/main/docs/runbooks/queue-backlog-or-dlq.md
+    - alert: PixelpipeWorkerStuck
+      expr: (time() - max(pixelpipe_worker_last_poll_timestamp_seconds)) > 300 and on() kube_deployment_status_replicas{namespace="pixelpipe",deployment="pixelpipe-worker"} > 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: Worker pods exist but haven't polled SQS for 5 minutes
+        runbook_url: https://github.com/YOUR_GITHUB_USER/YOUR_REPO/blob/main/docs/runbooks/queue-backlog-or-dlq.md

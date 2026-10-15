@@ -1,0 +1,10 @@
+apiVersion: v2
+name: service
+description: >
+  Reusable chart for any stateless pixelpipe service. A new service gets a
+  Deployment, Service, Ingress, autoscaling (HPA or KEDA), PDB, NetworkPolicy,
+  ServiceMonitor and alert rules by writing ~30 lines of values -- this is the
+  "golden path" a platform team offers product teams.
+type: application
+version: 1.0.0
+appVersion: "latest"

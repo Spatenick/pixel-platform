@@ -1,0 +1,40 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny ingress for this service, then allow only what it needs:
+# Prometheus (monitoring namespace) and the VPC (ALB targets + kubelet probes).
+# Enforced by the VPC CNI network policy agent (enabled in infra/modules/eks).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "service.fullname" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- range .Values.networkPolicy.allowNamespaces }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.allowCIDRs (or .Values.containerPort .Values.metricsPort) }}
+    - from:
+        {{- range .Values.networkPolicy.allowCIDRs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        {{- if .Values.containerPort }}
+        - port: {{ .Values.containerPort }}
+          protocol: TCP
+        {{- end }}
+        {{- if .Values.metricsPort }}
+        - port: {{ .Values.metricsPort }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+{{- end }}

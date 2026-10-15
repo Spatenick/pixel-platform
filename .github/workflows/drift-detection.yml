@@ -1,0 +1,59 @@
+name: drift-detection
+
+# Daily `terraform plan` against dev. If anything changed outside Terraform
+# (someone clicked in the console), open or update an issue.
+# Enable by setting the repo variable DRIFT_DETECTION_ENABLED=true while dev is up.
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  detect:
+    if: vars.DRIFT_DETECTION_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/envs/dev
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "<1.15.0"
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TF_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.AWS_REGION }}"
+      - name: plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -lock=false -no-color -detailed-exitcode > plan.txt 2>&1
+          code=$?
+          set -e
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          tail -40 plan.txt
+          [ "$code" -eq 1 ] && exit 1 || true
+      - name: Open/update drift issue
+        if: steps.plan.outputs.exitcode == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('infra/envs/dev/plan.txt', 'utf8').slice(-50000);
+            const title = 'Infrastructure drift detected in dev';
+            const body = `Scheduled plan found differences between Terraform and AWS.\n\n<details><summary>plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>\n\nEither apply (\`infra-apply\` workflow) or codify the manual change.`;
+            const { data: issues } = await github.rest.issues.listForRepo({ ...context.repo, state: 'open', labels: 'drift' });
+            if (issues.length) {
+              await github.rest.issues.update({ ...context.repo, issue_number: issues[0].number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body, labels: ['drift'] });
+            }

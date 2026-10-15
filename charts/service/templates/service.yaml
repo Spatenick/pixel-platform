@@ -1,0 +1,25 @@
+{{- if and .Values.service.enabled (or .Values.containerPort .Values.metricsPort) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "service.fullname" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "service.selectorLabels" . | nindent 4 }}
+  ports:
+    {{- if .Values.containerPort }}
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+    {{- end }}
+    {{- if .Values.metricsPort }}
+    - name: metrics
+      port: {{ .Values.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+{{- end }}

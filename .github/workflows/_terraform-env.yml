@@ -1,0 +1,62 @@
+name: terraform-env
+
+# Reusable workflow: apply or destroy one environment. Bound to a GitHub
+# environment, which is what lets the OIDC "apply" role be assumed (its trust
+# policy only accepts the environment:dev / environment:prod subjects).
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      action:
+        type: string
+        default: apply
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    name: ${{ inputs.action }} ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 90
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      ENV: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "<1.15.0"
+          terraform_wrapper: false
+      - uses: azure/setup-kubectl@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TF_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: terraform init
+        working-directory: infra/envs/${{ inputs.environment }}
+        run: terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - name: terraform apply
+        if: inputs.action == 'apply'
+        working-directory: infra/envs/${{ inputs.environment }}
+        run: |
+          terraform plan -lock-timeout=10m -out=tfplan
+          terraform apply -lock-timeout=10m tfplan
+
+      - name: Smoke test
+        if: inputs.action == 'apply'
+        run: ./scripts/smoke-test.sh "$ENV" || echo "::warning::Smoke test failed (normal on the very first apply while Argo CD is still syncing)"
+
+      - name: Teardown (cleans up ALBs/volumes created by Kubernetes, then terraform destroy)
+        if: inputs.action == 'destroy'
+        run: ./scripts/teardown.sh "$ENV" --yes
