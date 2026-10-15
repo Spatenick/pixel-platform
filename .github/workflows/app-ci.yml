@@ -45,8 +45,8 @@ jobs:
       run:
         working-directory: apps/${{ matrix.service }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -65,8 +65,8 @@ jobs:
     name: chart, manifests & alert rules
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
       - name: Install kubeconform + promtool
         run: |
           curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
@@ -108,11 +108,11 @@ jobs:
     env:
       IMAGE: ${{ vars.ECR_REGISTRY }}/pixelpipe-${{ matrix.service }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/${{ matrix.service }}
           load: true
@@ -122,7 +122,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
       - name: Scan image (fail on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: local/pixelpipe-${{ matrix.service }}:${{ github.sha }}
           severity: HIGH,CRITICAL
@@ -131,7 +131,7 @@ jobs:
 
       - name: Configure AWS credentials (OIDC)
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.ECR_PUSH_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -152,7 +152,7 @@ jobs:
     permissions:
       contents: write # commit the new image tag
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Bump image tags in gitops/envs/dev
         run: |
           for svc in api worker; do
