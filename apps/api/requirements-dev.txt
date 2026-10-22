@@ -1,6 +1,6 @@
 -r requirements.txt
 pytest==9.1.1
-httpx2==2.13.1
+httpx2==2.14.0
 moto[s3,sqs]==5.2.4
-pillow==12.3.0
+pillow==13.0.0
 ruff==0.17.1
