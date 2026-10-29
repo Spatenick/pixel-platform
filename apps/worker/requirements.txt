@@ -1,5 +1,5 @@
-boto3==1.43.114
+boto3==1.43.118
 psycopg[binary]==3.3.6
 psycopg-pool==3.3.3
-pillow==12.3.0
+pillow==13.0.0
 prometheus-client==0.26.0
